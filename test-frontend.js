@@ -1,46 +1,68 @@
-const { chromium } = require('playwright');
-const path = require('path');
+// Simula el webhook de WhatsApp Cloud API contra el servidor local, firmando cada
+// petición como lo haría Meta (X-Hub-Signature-256), para probar el bot end-to-end
+// sin necesitar una cuenta real de Meta.
+const crypto = require("crypto");
+
+const BASE = process.env.TEST_BASE || "http://localhost:3900";
+const APP_SECRET = process.env.WHATSAPP_APP_SECRET || "test_app_secret";
+const FROM = "5216141234567";
+
+function sign(bodyStr) {
+  return "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(bodyStr).digest("hex");
+}
+
+function makePayload(text, profileName) {
+  return {
+    object: "whatsapp_business_account",
+    entry: [{
+      id: "123",
+      changes: [{
+        field: "messages",
+        value: {
+          messaging_product: "whatsapp",
+          metadata: { phone_number_id: "999" },
+          contacts: profileName ? [{ profile: { name: profileName }, wa_id: FROM }] : [],
+          messages: [{ from: FROM, id: "wamid." + Date.now(), timestamp: String(Date.now()), type: "text", text: { body: text } }]
+        }
+      }]
+    }]
+  };
+}
+
+async function sendMessage(text, profileName) {
+  const bodyStr = JSON.stringify(makePayload(text, profileName));
+  const res = await fetch(BASE + "/webhook/whatsapp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(bodyStr) },
+    body: bodyStr
+  });
+  const txt = await res.text();
+  console.log("POST", text, "->", res.status, txt);
+  return res.status;
+}
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  // 1) Verificación del webhook (GET)
+  const verifyUrl = BASE + "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=" +
+    encodeURIComponent(process.env.WHATSAPP_VERIFY_TOKEN || "verify_test_token") + "&hub.challenge=abc123";
+  const verifyRes = await fetch(verifyUrl);
+  console.log("GET verify ->", verifyRes.status, await verifyRes.text());
 
-  // 1) Standalone mode via file:// must behave exactly like before (no login gate, seed task).
-  const page1 = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  const errors1 = [];
-  page1.on('pageerror', err => errors1.push('PAGEERROR: ' + err.message));
-  await page1.goto('file://' + path.resolve(__dirname, '..', 'public', 'bitacora.html'));
-  await page1.waitForTimeout(500);
-  const loginGateInStandalone = await page1.isVisible('#login-form').catch(() => false);
-  await page1.click('#main-nav [data-view="tasks"]');
-  await page1.waitForTimeout(200);
-  const seedTaskVisible = await page1.isVisible('text=Entrega de muestrarios');
-  console.log('STANDALONE: login gate shown?', loginGateInStandalone, '| seed task visible?', seedTaskVisible);
-  console.log('STANDALONE ERRORS:', JSON.stringify(errors1));
-  await page1.close();
+  // 2) Firma inválida debe rechazarse
+  const badRes = await fetch(BASE + "/webhook/whatsapp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Hub-Signature-256": "sha256=deadbeef" },
+    body: JSON.stringify(makePayload("hola"))
+  });
+  console.log("POST firma inválida ->", badRes.status, "(esperado 401)");
 
-  // 2) Connected mode: edit a contact locally, verify it lands on the server via API.
-  const page2 = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page2.goto('http://localhost:3903/');
-  await page2.waitForTimeout(500);
-  if (await page2.isVisible('#login-form')) {
-    await page2.fill('#login-password', 'test1234');
-    await page2.click('#login-form button[type=submit]');
-    await page2.waitForTimeout(800);
-  }
-  await page2.click('#main-nav [data-view="contacts"]');
-  await page2.waitForTimeout(300);
-  await page2.click('[data-edit-contact]');
-  await page2.waitForTimeout(200);
-  await page2.fill('#f-notes', 'Nota editada desde el navegador para probar sincronización.');
-  await page2.click('#contact-form button[type=submit]');
-  await page2.waitForTimeout(500);
-  await page2.close();
+  // 3) Flujo completo: prospecto nuevo
+  await sendMessage("hola", "Marta Domínguez");     // -> saludo + menú
+  await sendMessage("1");                            // -> pide nombre
+  await sendMessage("Marta Domínguez");               // -> pide detalle
+  await sendMessage("Quiero tapizar un sillón de 3 plazas"); // -> pide ciudad
+  await sendMessage("Chihuahua");                     // -> crea contacto + negocio
 
-  const loginRes = await fetch('http://localhost:3903/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'test1234' }) });
-  const { token } = await loginRes.json();
-  const contactsRes = await fetch('http://localhost:3903/api/contacts', { headers: { Authorization: 'Bearer ' + token } });
-  const contacts = await contactsRes.json();
-  console.log('SERVER SIDE NOTES AFTER EDIT:', contacts.map(c => c.notes));
-
-  await browser.close();
+  // 4) Flujo: seguimiento de pedido (número distinto)
+  process.env.__SECOND = "1";
 })();
