@@ -1,0 +1,30 @@
+const crypto = require("crypto");
+const BASE = "http://localhost:3900";
+const APP_SECRET = "test_app_secret";
+
+function sign(bodyStr){ return "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(bodyStr).digest("hex"); }
+function makePayload(from, text, profileName){
+  return { object:"whatsapp_business_account", entry:[{ id:"123", changes:[{ field:"messages", value:{
+    messaging_product:"whatsapp", metadata:{phone_number_id:"999"},
+    contacts: profileName ? [{profile:{name:profileName}, wa_id:from}] : [],
+    messages:[{from, id:"wamid."+Date.now()+Math.random(), timestamp:String(Date.now()), type:"text", text:{body:text}}]
+  }}]}]};
+}
+async function send(from, text, profileName){
+  const bodyStr = JSON.stringify(makePayload(from, text, profileName));
+  const res = await fetch(BASE+"/webhook/whatsapp", {method:"POST", headers:{"Content-Type":"application/json","X-Hub-Signature-256":sign(bodyStr)}, body: bodyStr});
+  console.log(from, "POST", JSON.stringify(text), "->", res.status);
+}
+(async () => {
+  // Pedido en proceso
+  const p2 = "5216149998877";
+  await send(p2, "buenas", "Roberto Salas");
+  await send(p2, "2");
+  await send(p2, "Soy Roberto, tengo el pedido de las sillas de comedor folio 118");
+
+  // Mensaje que el bot no puede clasificar
+  const p3 = "5216141112233";
+  await send(p3, "hola", "Cliente Confundido");
+  await send(p3, "no sé, tengo una duda rara");
+  await send(p3, "no sé, tengo una duda rara"); // segunda vez sigue sin clasificar -> menu de nuevo
+})();
