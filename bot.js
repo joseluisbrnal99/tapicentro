@@ -8,14 +8,15 @@
 const store = require("./store");
 
 const GREETING =
-  "¡Hola! 👋 Soy el asistente de *Tapicentro*. ¿En qué te ayudamos hoy?\n\n" +
-  "1️⃣ Quiero cotizar un trabajo nuevo\n" +
-  "2️⃣ Ya tengo un pedido en proceso y quiero dar seguimiento\n" +
+  "¡Hola! 👋 Soy Lana, asistente virtual de *Tapicentro*, tu distribuidor de materiales para tapicería e interiores " +
+  "¿En qué te ayudamos hoy?\n\n" +
+  "1️⃣ Quiero cotizar productos de tapiceria\n" +
+  "2️⃣ Ya tengo un pedido en proceso y quiero modificarlo o dar seguimiento\n" +
   "3️⃣ Otro asunto / hablar con una persona";
 
 function classifyMenuChoice(text) {
   const t = (text || "").trim().toLowerCase();
-  if (t === "1" || /cotiz|presupuesto|nuevo trabajo|quiero.*tapiz/.test(t)) return "new";
+  if (t === "1" || /cotiz|presupuesto|material|catálogo|catalogo/.test(t)) return "new";
   if (t === "2" || /pedido|seguimiento|folio|ya.*encarg/.test(t)) return "order";
   if (t === "3" || /otro|persona|humano|asesor/.test(t)) return "other";
   return null;
@@ -82,7 +83,7 @@ async function handleIncomingMessage(from, text, profileName) {
       reply = "¡Perfecto! ¿Cuál es tu nombre completo?";
       convo = { state: "new_name", data: { profileName: capturedProfileName } };
     } else if (choice === "order") {
-      reply = "Claro, cuéntame tu nombre y qué pedido tienes con nosotros (puedes incluir el número de folio si lo tienes).";
+      reply = "Claro, cuéntame tu nombre y qué pedido de materiales tienes con nosotros (puedes incluir el número de folio si lo tienes).";
       convo = { state: "order_info", data: { profileName: capturedProfileName } };
     } else if (choice === "other") {
       fallbackToUnclassified(phone, capturedProfileName, text);
@@ -104,7 +105,12 @@ async function handleIncomingMessage(from, text, profileName) {
     }
   } else if (convo.state === "new_name") {
     convo.data.name = text.trim();
-    reply = "Gracias, " + convo.data.name.split(/\s+/)[0] + ". ¿Qué te gustaría tapizar o qué servicio necesitas? (ej. sala, sillas de comedor, cabecera…)";
+    reply = "Gracias, " + convo.data.name.split(/\s+/)[0] + ". ¿Cuál es el nombre de tu tapicería o negocio? (si compras para uso personal, escribe \"no aplica\")";
+    convo.state = "new_business";
+  } else if (convo.state === "new_business") {
+    const raw = text.trim();
+    convo.data.business = /^no\s*aplica$/i.test(raw) ? "" : raw;
+    reply = "¿Qué materiales necesitas y en qué cantidad? (ej. tela, vinil, espuma, cielo automotriz, cristal PVC para convertible, vinilona, herrajes…)";
     convo.state = "new_detail";
   } else if (convo.state === "new_detail") {
     convo.data.detail = text.trim();
@@ -112,9 +118,13 @@ async function handleIncomingMessage(from, text, profileName) {
     convo.state = "new_city";
   } else if (convo.state === "new_city") {
     convo.data.city = text.trim();
-    const contact = upsertContactFromWhatsApp(phone, convo.data.name, { city: convo.data.city });
+    const businessNote = convo.data.business ? ("Negocio/tapicería: " + convo.data.business + ". ") : "";
+    const contact = upsertContactFromWhatsApp(phone, convo.data.name, {
+      city: convo.data.city,
+      contactFields: { notes: "Contacto capturado automáticamente desde WhatsApp. " + businessNote }
+    });
     store.insert("deals", {
-      title: "Prospecto WhatsApp — " + (convo.data.detail || "sin detalle"),
+      title: "Prospecto WhatsApp — " + (convo.data.detail || "sin detalle") + (convo.data.business ? " (" + convo.data.business + ")" : ""),
       value: 0,
       stage: "lead",
       companyId: "",
